@@ -1,0 +1,201 @@
+//@version=6
+strategy("DC 5% | Python paper backtest", overlay = true, initial_capital = 10000,
+     pyramiding = 0, default_qty_type = strategy.fixed, default_qty_value = 1,
+     process_orders_on_close = false, calc_on_order_fills = false, calc_on_every_tick = false,
+     commission_type = strategy.commission.percent, commission_value = 0, slippage = 0)
+
+// The paper ledger is the Python-parity result. The optional native
+// Strategy Tester preview uses one share to show next-open order timing.
+const string NSE_TZ = "Asia/Kolkata"
+const float CAPITAL = 10000.0
+const float SLIPPAGE = 0.0005
+const int SEED_DAY = 20211123
+const int HOLDOUT_DAY = 20251123
+const int HOLDOUT_END = 20261122
+const int LAST_DEVELOPMENT_BAR = 20251121
+const int LAST_HOLDOUT_BAR = 20261120
+
+string phase = input.string("Holdout", "Sample", options = ["Development", "Holdout", "Forward alerts"])
+int forwardStart = input.time(timestamp("23 Nov 2026 00:00 +0530"), "Forward start (IST date)")
+bool showSignals = input.bool(true, "Show BUY/SELL confirmations")
+bool showFills = input.bool(true, "Show simulated fills")
+bool nativePreview = input.bool(false, "Native Strategy Tester timing preview (1 share, gross)",
+     tooltip = "Shows historical order timing. Use the on-chart paper table for Python quantities, fees and returns.")
+bool buyAlerts = input.bool(true, "BUY alerts", group = "Paper alerts")
+bool sellAlerts = input.bool(true, "SELL alerts", group = "Paper alerts")
+
+istDay(int ts) =>
+    year(ts, NSE_TZ) * 10000 + month(ts, NSE_TZ) * 100 + dayofmonth(ts, NSE_TZ)
+
+deliveryFees(float turnover, bool isBuy) =>
+    float stt = math.floor(turnover * 0.001 + 0.5)
+    float nse = turnover * 0.0000307
+    float sebi = turnover * 0.000001
+    float gst = (nse + sebi) * 0.18
+    float stamp = isBuy ? turnover * 0.00015 : 0.0
+    float dp = isBuy ? 0.0 : 15.34
+    stt + nse + sebi + gst + stamp + dp
+
+affordableShares(float available, float price) =>
+    int qty = math.floor(available / price)
+    while qty > 0
+        float turnover = qty * price
+        if turnover + deliveryFees(turnover, true) <= available
+            break
+        qty -= 1
+    math.max(0, qty)
+
+if barstate.isfirst and (not chart.is_standard or not timeframe.isdaily or timeframe.multiplier != 1)
+    runtime.error("Use a standard 1D chart with actual OHLC candles.")
+
+// TradingView can use a delayed or end-of-day feed ID for an NSE symbol.
+string feedPrefix = syminfo.prefix
+bool isNseFeed = feedPrefix == "NSE" or feedPrefix == "NSE_DL" or feedPrefix == "NSE_DLY" or feedPrefix == "NSE_EOD"
+if barstate.isfirst and (not isNseFeed or syminfo.currency != "INR" or syminfo.type != "stock")
+    runtime.error("Use an NSE equity chart quoted in INR. Detected feed " + feedPrefix +
+         ", currency " + syminfo.currency + ", type " + syminfo.type + ".")
+
+int day = istDay(time)
+bool isDevelopment = phase == "Development"
+bool isHoldout = phase == "Holdout"
+bool isForward = phase == "Forward alerts"
+int forwardDay = istDay(forwardStart)
+if barstate.isfirst and isForward and forwardDay <= HOLDOUT_END
+    runtime.error("Choose a forward date after 22 Nov 2026 (IST).")
+int firstTradeDay = isDevelopment ? SEED_DAY : isHoldout ? HOLDOUT_DAY : forwardDay
+bool inSample = day >= firstTradeDay and (isForward or (isDevelopment ? day < HOLDOUT_DAY : day <= HOLDOUT_END))
+
+// Direction = +1 up, -1 down, or 0 while the first move is unconfirmed.
+// Scale closes to integer millionths of INR before comparing the exact 5% ratios.
+var int direction = 0
+var int highClose = na
+var int lowClose = na
+int confirmation = 0
+if barstate.isconfirmed and day >= SEED_DAY
+    int closeUnits = math.round(close * 1000000.0)
+    if na(highClose)
+        if day != SEED_DAY
+            runtime.error("Load chart history that includes the 23 Nov 2021 seed session.")
+        highClose := closeUnits
+        lowClose := closeUnits
+    else if direction != 1 and closeUnits * 100 >= lowClose * 105
+        confirmation := 1
+        direction := 1
+        highClose := closeUnits
+    else if direction != -1 and closeUnits * 100 <= highClose * 95
+        confirmation := -1
+        direction := -1
+        lowClose := closeUnits
+    else
+        if direction != -1 and closeUnits > highClose
+            highClose := closeUnits
+        if direction != 1 and closeUnits < lowClose
+            lowClose := closeUnits
+
+// A new sample starts with fresh cash. The holdout keeps DC state from the
+// earlier closes, including a possible signal on the last development close.
+var float cash = CAPITAL
+var int shares = 0
+var float entryCost = 0.0
+var float equity = CAPITAL
+var float peakEquity = CAPITAL
+var float maxDrawdown = 0.0
+var float totalFees = 0.0
+var float totalSlippage = 0.0
+var float realizedPnl = 0.0
+var int closedTrades = 0
+var int wins = 0
+int fillSide = 0
+int fillQuantity = na
+float fillPrice = na
+if barstate.isconfirmed and inSample
+    int priorConfirmation = nz(confirmation[1], 0)
+    // This bar's open prices the preceding confirmation before its close is marked.
+    if priorConfirmation == 1 and shares == 0
+        float price = open * (1.0 + SLIPPAGE)
+        int qty = affordableShares(cash, price)
+        if qty > 0
+            float turnover = qty * price
+            float fees = deliveryFees(turnover, true)
+            entryCost := turnover + fees
+            cash -= entryCost
+            shares := qty
+            totalFees += fees
+            totalSlippage += qty * (price - open)
+            fillSide := 1
+            fillQuantity := qty
+            fillPrice := price
+    else if priorConfirmation == -1 and shares > 0
+        float price = open * (1.0 - SLIPPAGE)
+        float turnover = shares * price
+        float fees = deliveryFees(turnover, false)
+        float proceeds = turnover - fees
+        float profit = proceeds - entryCost
+        cash += proceeds
+        realizedPnl += profit
+        totalFees += fees
+        totalSlippage += shares * (open - price)
+        closedTrades += 1
+        wins += profit > 0 ? 1 : 0
+        fillSide := -1
+        fillQuantity := shares
+        fillPrice := price
+        shares := 0
+        entryCost := 0.0
+    equity := cash + shares * close
+    peakEquity := math.max(peakEquity, equity)
+    maxDrawdown := math.max(maxDrawdown, (peakEquity - equity) / peakEquity * 100.0)
+
+// In the historical samples, the last close can confirm a direction but has
+// no execution session in the sample. Its raw confirmation remains auditable.
+int lastSampleBar = isDevelopment ? LAST_DEVELOPMENT_BAR : LAST_HOLDOUT_BAR
+bool holdoutBoundary = isHoldout and day == LAST_DEVELOPMENT_BAR
+bool canQueue = (inSample and (isForward or day < lastSampleBar)) or holdoutBoundary
+bool buySignal = barstate.isconfirmed and canQueue and confirmation == 1 and shares == 0
+bool sellSignal = barstate.isconfirmed and canQueue and confirmation == -1 and shares > 0
+
+if isForward and buySignal and buyAlerts
+    alert("PAPER DC 5% BUY confirmation | " + syminfo.tickerid + " | " + str.tostring(day) +
+          " IST | Next daily open simulation", alert.freq_once_per_bar_close)
+if isForward and sellSignal and sellAlerts
+    alert("PAPER DC 5% SELL confirmation | " + syminfo.tickerid + " | " + str.tostring(day) +
+          " IST | Next daily open simulation", alert.freq_once_per_bar_close)
+
+if nativePreview and not isForward
+    if buySignal and strategy.position_size == 0
+        strategy.entry("Timing preview", strategy.long, qty = 1, disable_alert = true)
+    if sellSignal and strategy.position_size > 0
+        strategy.close("Timing preview", immediately = false, disable_alert = true)
+
+plotshape(showSignals and buySignal, title = "BUY confirmation", style = shape.triangleup,
+     location = location.belowbar, color = color.teal, size = size.tiny, text = "BUY")
+plotshape(showSignals and sellSignal, title = "SELL confirmation", style = shape.triangledown,
+     location = location.abovebar, color = color.orange, size = size.tiny, text = "SELL")
+plotshape(showFills and fillSide == 1, title = "Simulated BUY fill", style = shape.labelup,
+     location = location.belowbar, color = color.green, textcolor = color.white, size = size.tiny, text = "BUY fill")
+plotshape(showFills and fillSide == -1, title = "Simulated SELL fill", style = shape.labeldown,
+     location = location.abovebar, color = color.red, textcolor = color.white, size = size.tiny, text = "SELL fill")
+
+plot(confirmation == 0 ? na : confirmation, "DC confirmation (+1 up, -1 down)", display = display.data_window)
+plot(fillSide == 0 ? na : fillSide, "Paper fill side (+1 buy, -1 sell)", display = display.data_window)
+plot(fillQuantity, "Paper fill shares", display = display.data_window)
+plot(fillPrice, "Paper fill price (INR)", display = display.data_window)
+plot(inSample and barstate.isconfirmed ? equity : na, "Paper closing equity (INR)", display = display.data_window)
+
+var table summary = table.new(position.top_right, 2, 10, bgcolor = color.rgb(22, 30, 40), border_width = 1)
+putRow(int row, string rowLabel, string value) =>
+    table.cell(summary, 0, row, rowLabel, text_color = color.white, text_halign = text.align_left)
+    table.cell(summary, 1, row, value, text_color = color.white, text_halign = text.align_right)
+
+if barstate.islast
+    float pnl = equity - CAPITAL
+    putRow(0, "DC 5% PAPER", phase)
+    putRow(1, "Equity (INR)", str.tostring(equity, "#.00"))
+    putRow(2, "Net P/L (INR)", str.tostring(pnl, "#.00"))
+    putRow(3, "Return", str.tostring(pnl / CAPITAL * 100.0, "#.00") + "%")
+    putRow(4, "Closed / winning trades", str.tostring(closedTrades) + " / " + str.tostring(wins))
+    putRow(5, "Win rate", closedTrades > 0 ? str.tostring(100.0 * wins / closedTrades, "#.00") + "%" : "—")
+    putRow(6, "Max closing drawdown", str.tostring(maxDrawdown, "#.00") + "%")
+    putRow(7, "Fees / slippage (INR)", str.tostring(totalFees, "#.00") + " / " + str.tostring(totalSlippage, "#.00"))
+    putRow(8, "Open shares / realized P/L", str.tostring(shares) + " / " + str.tostring(realizedPnl, "#.00"))
+    putRow(9, "Strategy Tester", nativePreview and not isForward ? "1-share gross preview" : "Paper table")

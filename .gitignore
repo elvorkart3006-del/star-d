@@ -1,0 +1,19 @@
+
+# Protect sensitive information
+.env
+.env.*
+secrets.json
+credentials.json
+.streamlit/secrets.toml
+*access_token*
+
+# Python temporary files
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3

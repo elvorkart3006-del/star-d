@@ -6,19 +6,15 @@ import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from html import escape
-from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
-from kiteconnect.exceptions import KiteException, TokenException
-from requests.exceptions import RequestException
 
 import dc_forward as forward
 import dc_report_metrics as metrics
-import dc_research as research
-import multi_stock_scanner as scanner
 import paper_trading as paper
+from market_data_retention import is_raw_market_column, strip_raw_market_columns
 
 
 REPORT_DIR = forward.JOURNAL_PATH.parent / "dc_daily_reports"
@@ -34,12 +30,9 @@ RELIABILITY_FIELDS = (
     "all_quotes_fresh_observed",
 )
 DETAILS = {
-    "signals": ("symbol", "session", "direction", "confirmation_close_inr", "observed_at", "status"),
-    "positions": ("symbol", "shares", "cost_inr", "mark_inr", "unrealized_pnl_inr"),
-    "fills": (
-        "symbol", "session", "direction", "filled_at", "quote_at", "shares",
-        "quote_price_inr", "fill_price_inr", "fees_inr", "slippage_inr", "realized_pnl_inr",
-    ),
+    "signals": ("symbol", "session", "direction", "observed_at", "status"),
+    "positions": ("symbol",),
+    "fills": ("symbol", "session", "direction", "filled_at"),
     "missed": ("symbol", "signal_session", "direction", "expected_fill_date", "ledger_status_at_generation"),
     "observations": ("observed_at", "source", "status", "fresh_quotes", "stale_quotes", "missing_quotes"),
     "readiness": ("criterion", "target", "progress", "met"),
@@ -99,49 +92,8 @@ def load_scanner_closes(path, day):
 
 
 def refresh_closes(ledger, through, now, overrides, *, source):
-    """Fetch completed candles only. Scheduled reports never submit simulated fills."""
-    snapshot = ledger.snapshot()
-    if snapshot is None:
-        return "Forward test has yet to start"
-    first = metrics.day_of(snapshot.run["started_at"])
-    if first > through:
-        return "Forward test has yet to start on the report date"
-    seed = research.load_histories()
-    histories = forward.histories_with_closes(seed, snapshot.closes)
-    saved_days = {symbol: set(history["date"].dt.date) for symbol, history in histories.items()}
-    observed = set().union(*saved_days.values())
-    starts = {}
-    for symbol, days in saved_days.items():
-        # Also look for older gaps inside the enrolled period.
-        start = next((
-            day for day in metrics.days_between(min(first, max(days) + timedelta(days=1)), through)
-            if day not in days and (
-                day in observed or not metrics.scheduled_closure(day, overrides)
-                or day.weekday() >= 5 and day not in overrides
-            )
-        ), None)
-        if start is not None:
-            starts[symbol] = min(start, max(days) + timedelta(days=1))
-    if not starts:
-        return "Saved data or scheduled closure"
-    try:
-        kite = scanner.create_kite_client()
-        catalog = scanner.get_nse_equity_universe(kite)
-        candles = forward.fetch_completed_candles(kite, catalog, starts, through)
-        ledger.refresh(seed, candles, {}, paper.now_ist(), source=source)
-        return "Updated"
-    except scanner.MissingCredentialsError:
-        status = "Missing credentials"
-    except TokenException:
-        status = "Expired or invalid Kite token"
-    except RequestException:
-        status = "Network error"
-    except KiteException:
-        status = "Kite API error"
-    except ValueError:
-        status = "Market data error"
-    ledger.record_observation(paper.now_ist(), source, status)
-    return status
+    """Keep the old CLI option harmless while external DC feeds are paused."""
+    return f"Paused: {forward.MARKET_DATA_PAUSE_REASON}"
 
 
 def report_revisions(root=None, day=None):
@@ -180,8 +132,9 @@ def load_latest_report(root=None, day=None):
 
 def load_archived_report(version):
     """Load a full revision before exposing it in the dashboard or reusing it."""
-    summary_csv = (version / "summary.csv").read_bytes()
-    summary = pd.read_csv(BytesIO(summary_csv))
+    summary = pd.read_csv(version / "summary.csv")
+    summary = strip_raw_market_columns(summary)
+    summary_csv = summary.to_csv(index=False).encode("utf-8")
     if len(summary) != 1 or not {"date", "stage", "generated_at_ist"} <= set(summary):
         raise ValueError("summary.csv must contain one report row and its generation timestamp.")
     row = summary.iloc[0]
@@ -191,7 +144,7 @@ def load_archived_report(version):
     html = (version / "report.html").read_bytes()
     if not html.strip():
         raise ValueError("report.html is empty.")
-    history = pd.read_csv(version / "history.csv")
+    history = strip_raw_market_columns(pd.read_csv(version / "history.csv"))
     if history.empty or not {"date", "equity_inr", "buy_hold_equity_inr", "drawdown_pct"} <= set(history):
         raise ValueError("history.csv is missing dates or chart columns.")
     history["date"] = pd.to_datetime(history["date"], format="%Y-%m-%d")
@@ -199,8 +152,17 @@ def load_archived_report(version):
         raise ValueError("history.csv contains a missing date.")
     for key in ("equity_inr", "buy_hold_equity_inr", "drawdown_pct"):
         history[key] = pd.to_numeric(history[key])
-    details = {key: pd.read_csv(version / f"{key}.csv") for key in DETAILS}
+    details = {
+        key: safe_detail_frame(key, pd.read_csv(version / f"{key}.csv"))
+        for key in DETAILS
+    }
     return ArchivedReport(version, row, summary_csv, html, history, details)
+
+
+def safe_detail_frame(name, frame):
+    """Retain event labels while omitting exact or reconstructive per-trade values."""
+    allowed = DETAILS[name]
+    return frame.reindex(columns=[column for column in allowed if column in frame]).copy()
 
 
 def detail_frames(report):
@@ -269,7 +231,10 @@ def _table(frame):
 
 def render_html(report, history, generated_at, frames):
     row = report.summary
-    performance = {key: value for key, value in row.items() if key not in RELIABILITY_FIELDS and key != "date"}
+    performance = {
+        key: value for key, value in row.items()
+        if key not in RELIABILITY_FIELDS and key != "date" and not is_raw_market_column(key)
+    }
     reliability = {key: row[key] for key in RELIABILITY_FIELDS}
 
     def key_values(values):
@@ -314,9 +279,14 @@ def render_html(report, history, generated_at, frames):
 
 def save_report(report, history, now, root):
     day = report.summary["date"]
-    frames = detail_frames(report)
+    frames = {
+        key: safe_detail_frame(key, frame)
+        for key, frame in detail_frames(report).items()
+    }
     canonical = {
-        "summary": pd.DataFrame([report.summary]), "history": pd.DataFrame(history), **frames,
+        "summary": strip_raw_market_columns(pd.DataFrame([report.summary])),
+        "history": strip_raw_market_columns(pd.DataFrame(history)),
+        **frames,
     }
     csvs = {name: frame.to_csv(index=False, float_format="%.6f") for name, frame in canonical.items()}
     digest = hashlib.sha256("".join(csvs.values()).encode("utf-8")).hexdigest()
@@ -381,7 +351,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", type=date.fromisoformat, help="Report date in India, including today's interim report.")
     parser.add_argument("--catch-up", action="store_true", help="Fill missing report dates since forward enrollment.")
-    parser.add_argument("--refresh", action="store_true", help="Try Kite historical candles before saving. Paper fills stay manual.")
+    parser.add_argument("--refresh", action="store_true", help="Compatibility option; DC external data refresh is paused.")
     parser.add_argument("--scheduled", action="store_true", help="Label a Windows scheduled execution.")
     args = parser.parse_args(argv)
     now = paper.now_ist()

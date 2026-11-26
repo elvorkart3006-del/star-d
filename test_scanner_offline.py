@@ -35,13 +35,16 @@ def make_prices(closes):
 
 
 def chart_output(app):
-    """Read the actual Vega-Lite spec and Arrow datasets sent to the browser."""
-    (element,) = app.get("vega_lite_chart")
-    datasets = {
-        dataset.name: pa.ipc.open_stream(dataset.data.data).read_all().to_pylist()
-        for dataset in element.proto.datasets
-    }
-    return json.loads(element.proto.spec), datasets
+    """Read the scanner chart, ignoring charts from other dashboard sections."""
+    for element in app.get("vega_lite_chart"):
+        datasets = {
+            dataset.name: pa.ipc.open_stream(dataset.data.data).read_all().to_pylist()
+            for dataset in element.proto.datasets
+        }
+        content = element.proto.spec + json.dumps(datasets)
+        if "SMA 6" in content and "SMA 30" in content:
+            return json.loads(element.proto.spec), datasets
+    raise AssertionError("The SMA scanner chart was not rendered.")
 
 
 class FakeKite:
@@ -352,17 +355,36 @@ class ScannerOfflineTests(unittest.TestCase):
         app.session_state["chart_data"] = {"INFY": {"history": history.iloc[1:], "events": []}}
         app.run()
         self.assertFalse(app.exception)
-        self.assertFalse(app.get("vega_lite_chart"))
+        with self.assertRaisesRegex(AssertionError, "SMA scanner chart was not rendered"):
+            chart_output(app)
         self.assertTrue(any("No valid completed prices" in item.value for item in app.caption))
 
     def test_existing_legacy_csv_loads_without_missing_columns(self):
         from streamlit.testing.v1 import AppTest
 
-        # The project's current export has the original seven-column schema.
-        app = AppTest.from_file(str(PROJECT_FOLDER / "trading_dashboard.py"))
-        app.run()
-        self.assertFalse(app.exception)
-        self.assertTrue(any("SMA 6/30" in item.value for item in app.info))
+        # Supply a temporary, synthetic derived export. Never depend on or
+        # restore a local market-data file for this compatibility check.
+        data_dir = PROJECT_FOLDER / "data"
+        results_file = data_dir / "stock_scanner_results_derived.csv"
+        made_directory = not data_dir.exists()
+        if results_file.exists():
+            self.fail("Refusing to overwrite an existing scanner export.")
+        data_dir.mkdir(exist_ok=True)
+        results_file.write_text(
+            "Company,Symbol,Latest Crossover,Crossover Date,Sessions Ago,"
+            "Status,SMA Short Period,SMA Long Period\n"
+            "Synthetic Co,SYNTH,N/A,,0,offline test,6,30\n",
+            encoding="utf-8",
+        )
+        try:
+            app = AppTest.from_file(str(PROJECT_FOLDER / "trading_dashboard.py"))
+            app.run()
+            self.assertFalse(app.exception)
+            self.assertTrue(any("SMA 6/30" in item.value for item in app.info))
+        finally:
+            results_file.unlink(missing_ok=True)
+            if made_directory:
+                data_dir.rmdir()
 
 
 if __name__ == "__main__":

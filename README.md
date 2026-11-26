@@ -1,8 +1,8 @@
 # Trading research and paper trading
 
-A Streamlit dashboard and research workspace for seven NSE equities. The project includes an SMA scanner and chart, a manual paper-trading ledger, historical SMA 6/30 and Directional Change (DC) backtests, and separate forward paper tracking for fixed DC 5%. Trades and fills in this project are simulated.
+A Streamlit research dashboard for NSE equities, with SMA and Directional Change (DC) analysis. Kite-powered paper-trading workflows are disabled. Historical candles may be processed temporarily for research, but raw Kite market data must not be permanently stored or redistributed. Scanner exports retain derived signals only; local journals and old data are excluded from this repository.
 
-This is the proposed contents of a private GitHub repository. The source and sanitized documentation can be reviewed locally. Credentials, market datasets, journals, generated reports, backups and reference documents are excluded.
+This repository contains source code and sanitized documentation. Credentials, market datasets, journals, generated reports, backups and reference documents are excluded. Do not use Kite live quotes in paper trading or simulated portfolios. Use synthetic inputs or a market-data source explicitly authorized for simulation.
 
 ## Start here
 
@@ -17,11 +17,11 @@ This is the proposed contents of a private GitHub repository. The source and san
 
 | File | Purpose |
 | --- | --- |
-| `trading_dashboard.py` | Streamlit scanner, SMA chart, manual paper trading, DC forward tracking and report views |
+| `trading_dashboard.py` | Streamlit scanner, SMA chart, disabled paper-trading panel, DC forward tracking and report views |
 | `kite_callback.py` | Local browser login and token refresh for authorized Kite use |
 | `backtest_sma_6_30_multiyear.py` | Historical SMA 6/30 evaluation with development, holdout and yearly output |
 | `dc_research.py` and `dc_robustness.py` | Fixed-threshold DC research and transaction cost stress tests |
 | `dc_daily_report.py` and `dc_report_schedule.py` | Local reporting and Windows Task Scheduler XML export |
 | `dc_5_percent_strategy.pine` | TradingView Pine v6 implementation with on-chart paper results |
 
-The offline tests use simulated inputs, with one legacy compatibility test that uses a local scanner export. Kite's published terms restrict using its APIs or live quotes for virtual or mock trading. Use synthetic data or a feed authorized for simulation when evaluating paper workflows. [Kite Connect terms](https://kite.trade/terms/#api-usage)
+Offline tests use synthetic inputs and do not contact Kite. Scanner exports omit exact closes, LTPs and quote timestamps. Paper-trading screens and DC external-data refreshes are paused. Kite historical data can be used temporarily for analysis only; it must not be permanently stored or redistributed. Derived research outputs may be retained only when they cannot be used to reconstruct raw prices. [Kite Connect terms](https://kite.trade/terms/#api-usage)

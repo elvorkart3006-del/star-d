@@ -15,20 +15,28 @@ import paper_trading as paper
 MONITOR_SECONDS = 30
 
 
+class PaperTradingDisabledError(RuntimeError):
+    """Raised when a caller tries to use Kite quotes for paper trading."""
+
+
+def fetch_paper_quotes(symbols):
+    """Fail closed: Kite quotes are not permitted as simulated trade prices."""
+    raise PaperTradingDisabledError(
+        "Kite-powered paper trading is disabled. Use no quotes from this endpoint."
+    )
+
+
 def render_paper_trading(names, fetch_quotes):
     st.divider()
     st.header("PAPER TRADING")
-    st.info("Simulation only. Zerodha supplies prices. Fills, cash and stops are virtual.")
-    monitor = st.toggle("Monitor PAPER stops while this dashboard is open", key="paper_monitor")
     st.caption(
-        "Stops are checked on paper price refreshes and trade submissions. Optional monitoring "
-        "checks held stocks every 30 seconds during the 09:15–15:30 IST simulation window. "
-        "A stop fills at the observed price with slippage, so gaps can increase the loss."
+        "Kite-powered paper trading and quote refreshes are disabled. The saved paper account "
+        "configuration and journal remain untouched."
     )
-    panel = st.fragment(
-        _render_account, run_every=MONITOR_SECONDS if monitor else None, key="paper_account"
+    st.warning(
+        "Live Kite market data cannot be used for simulated portfolios. Paper trading can resume "
+        "only with synthetic prices or a separately licensed feed that permits paper use."
     )
-    panel(names, fetch_quotes, monitor)
 
 
 def _render_account(names, fetch_quotes, monitor):
@@ -218,9 +226,12 @@ def _portfolio_tables(portfolio):
     else:
         journal = _journal_dataframe(portfolio.journal)
         st.dataframe(journal, hide_index=True, alt="Permanent PAPER TRADING journal")
+        journal_export = journal.reindex(
+            columns=["Paper ID", "Filled at (IST)", "Symbol", "Side", "Reason"]
+        )
         st.download_button(
             "Download PAPER journal CSV",
-            data=journal.to_csv(index=False).encode("utf-8"),
+            data=journal_export.to_csv(index=False).encode("utf-8"),
             file_name="paper_trading_journal.csv",
             mime="text/csv",
             on_click="ignore",

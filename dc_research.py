@@ -217,6 +217,14 @@ def period_summary(comparison):
     return pd.DataFrame(rows)
 
 
+def derived_fill_events(fills):
+    """Keep event metadata while excluding prices and price-reconstructing values."""
+    columns = [
+        "period", "stock", "side", "extreme_date", "confirmation_date", "fill_date",
+    ]
+    return fills.reindex(columns=columns).copy()
+
+
 def load_histories():
     histories = {}
     for symbol in kite_batch.SYMBOLS:
@@ -236,7 +244,7 @@ def main():
     for name, frame in (
         ("dc_comparison.csv", comparison),
         ("dc_period_summary.csv", summary),
-        ("dc_fills.csv", fills),
+        ("dc_fills_derived.csv", derived_fill_events(fills)),
     ):
         kite_batch.save_csv_once(frame, OUTPUT_DIR / name, float_format="%.4f")
     print(summary.to_string(index=False, float_format=lambda value: f"{value:.2f}"))

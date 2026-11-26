@@ -1,4 +1,4 @@
-"""Download and save the recent daily historical prices for Infosys."""
+"""Temporarily process recent Infosys candles without saving raw prices."""
 
 import os
 from datetime import datetime, timedelta
@@ -64,25 +64,11 @@ def main():
         print("No historical prices were returned for the selected date range.")
         return
 
-    display_data = data.tail(5).rename(
-        columns={
-            "date": "Date",
-            "open": "Open",
-            "high": "High",
-            "low": "Low",
-            "close": "Close",
-            "volume": "Volume",
-        }
-    )
-    display_data["Date"] = pd.to_datetime(display_data["Date"]).dt.strftime("%Y-%m-%d")
-    print("Infosys (INFY) - latest five trading days")
-    print(display_data.to_string(index=False))
-
-    data_folder = Path(__file__).with_name("data")
-    data_folder.mkdir(parents=True, exist_ok=True)
-    csv_file = data_folder / "INFY_historical.csv"
-    data.to_csv(csv_file, index=False)
-    print(f"\nHistorical data saved to {csv_file.relative_to(Path(__file__).parent)}")
+    sessions = pd.to_datetime(data["date"])
+    print(f"Infosys (INFY) candles processed in memory: {len(data)} trading sessions")
+    print(f"Earliest session: {sessions.min():%Y-%m-%d}")
+    print(f"Latest session: {sessions.max():%Y-%m-%d}")
+    print("Raw candles were not saved to disk.")
 
 
 if __name__ == "__main__":

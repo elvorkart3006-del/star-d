@@ -9,6 +9,7 @@ from requests.exceptions import RequestException
 
 import backtest_with_costs as backtest
 import multi_stock_scanner as scanner
+from market_data_retention import strip_raw_market_columns
 
 
 SYMBOLS = ("INFY", "TCS", "WIPRO", "HDFCBANK", "ICICIBANK", "SBIN", "ITC")
@@ -90,16 +91,16 @@ def comparison_row(symbol, prices, sma, benchmark):
 
 
 def save_csv_once(frame, path, **options):
-    """Keep existing reports and downloads intact on a repeated run."""
+    """Save a derived report once, filtering any exact market-data fields."""
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        frame.to_csv(path, index=False, mode="x", **options)
+        strip_raw_market_columns(frame).to_csv(path, index=False, mode="x", **options)
     except FileExistsError:
         pass
 
 
 def iter_histories(start, end, destination, create_client=scanner.create_kite_client):
-    """Yield each stock's cached or newly downloaded daily history."""
+    """Yield cached or newly downloaded candles for temporary analysis only."""
     kite = None
     tokens = {}
     for symbol in SYMBOLS:
@@ -143,7 +144,6 @@ def iter_histories(start, end, destination, create_client=scanner.create_kite_cl
             yield symbol, None
             continue
 
-        save_csv_once(prices, history_path)
         yield symbol, prices
 
 

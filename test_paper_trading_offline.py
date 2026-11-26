@@ -149,75 +149,30 @@ class PaperTradingTests(unittest.TestCase):
         self.assertFalse(self.account.snapshot().positions)
         self.assertEqual(len(self.account.snapshot().journal), 2)
 
-    def test_dashboard_configures_and_uses_only_kite_quotes_for_paper_actions(self):
+    def test_dashboard_disables_kite_paper_trading_and_preserves_account(self):
         from streamlit.testing.v1 import AppTest
 
-        class QuoteOnlyKite:
-            def __init__(self):
-                self.requests = []
-                self.price = 100
-                self.now = NOW
-
-            def quote(self, instruments):
-                self.requests.append(instruments)
-                return {"NSE:INFY": {"last_price": self.price, "last_trade_time": self.now.isoformat()}}
-
-        kite = QuoteOnlyKite()
+        self.account.configure(paper.Settings(5_000_000, 40, 4, 8))
+        before = self.account.snapshot()
         with (
             patch.object(paper, "JOURNAL_PATH", self.path),
-            patch.object(paper, "now_ist", side_effect=lambda: kite.now),
-            patch.object(scanner, "create_kite_client", return_value=kite),
-            patch.object(scanner, "_call_with_rate_limit", side_effect=lambda call, endpoint: call()),
+            patch.object(scanner, "create_kite_client", side_effect=AssertionError("Kite called")) as client,
         ):
             app = AppTest.from_file(str(PROJECT / "trading_dashboard.py"), default_timeout=10).run()
             self.assertFalse(app.exception)
             self.assertTrue(any(item.value == "PAPER TRADING" for item in app.header))
             self.assertTrue(any(button.label == "Refresh Scanner" for button in app.button))
-            self.assertFalse(self.path.exists())
-            self.assertFalse(kite.requests)
+            self.assertTrue(any("configuration and journal remain untouched" in item.value for item in app.caption))
+            labels = {button.label for button in app.button}
+            self.assertNotIn("Simulate PAPER trade", labels)
+            self.assertNotIn("Refresh PAPER prices and check stops", labels)
+            self.assertNotIn("Save PAPER settings", labels)
+            client.assert_not_called()
 
-            def click(label):
-                next(button for button in app.button if button.label == label).click().run()
-                self.assertFalse(app.exception)
-
-            app.number_input(key="paper_capital").set_value(50_000.0)
-            click("Save PAPER settings")
-            self.assertEqual(self.account.snapshot().cash, 5_000_000)
-
-            app.selectbox(key="paper_symbol").set_value("INFY").run()
-            app.number_input(key="paper_quantity").set_value(5)
-            click("Simulate PAPER trade")
-            self.assertEqual(self.account.snapshot().positions["INFY"]["quantity"], 5)
-
-            kite.price = 110
-            kite.now += timedelta(minutes=1)
-            click("Refresh PAPER prices and check stops")
-            marked = self.account.snapshot()
-            self.assertGreater(marked.unrealized, 0)
-            self.assertEqual(len(marked.journal), 1)
-
-            kite.price = 120
-            kite.now += timedelta(minutes=1)
-            app.radio(key="paper_side").set_value("SELL")
-            app.number_input(key="paper_quantity").set_value(2)
-            click("Simulate PAPER trade")
-            self.assertEqual(self.account.snapshot().positions["INFY"]["quantity"], 3)
-
-            kite.price = 80
-            kite.now += timedelta(minutes=1)
-            app.session_state["paper_last_check"] = -30
-            app.toggle(key="paper_monitor").set_value(True).run()
-            self.assertFalse(app.exception)
-            self.assertFalse(self.account.snapshot().positions)
-            self.assertTrue(any("PAPER stop-loss executed" in item.value for item in app.warning))
-            self.assertEqual(kite.requests, [["NSE:INFY"]] * 4)
-
-            reopened = AppTest.from_file(str(PROJECT / "trading_dashboard.py"), default_timeout=10).run()
-            self.assertFalse(reopened.exception)
-            self.assertEqual(kite.requests, [["NSE:INFY"]] * 4)
-            journal = next(item.value for item in reopened.dataframe if "Paper ID" in item.value)
-            self.assertEqual(journal["Side"].tolist(), ["SELL", "SELL", "BUY"])
-            self.assertEqual(journal["Reason"].tolist(), ["Stop-loss", "Manual", "Manual"])
+        after = self.account.snapshot()
+        self.assertEqual(after.settings, before.settings)
+        self.assertEqual(after.cash, before.cash)
+        self.assertEqual(after.journal, before.journal)
 
 
 if __name__ == "__main__":

@@ -112,8 +112,9 @@ class ForwardLedgerTests(unittest.TestCase):
         self.assertEqual([row["session"] for row in state.closes], [str(MONDAY)])
         self.assertEqual(state.signals, [])
 
-    def test_dashboard_dc_refresh_preserves_manual_paper_journal(self):
+    def test_dashboard_pauses_dc_refresh_and_preserves_manual_paper_journal(self):
         from streamlit.testing.v1 import AppTest
+        from dc_forward_view import fetch_market
 
         manual = self.directory / "manual.sqlite3"
         paper.PaperAccount(manual).configure(paper.Settings())
@@ -126,24 +127,16 @@ class ForwardLedgerTests(unittest.TestCase):
             patch("dc_forward_view.load_seed", return_value=self.seed),
             patch("dc_forward_view.fetch_market") as market,
         ):
+            with self.assertRaises(forward.MarketDataPaused):
+                fetch_market({}, clock(MONDAY, 10), object())
             app = AppTest.from_file(str(PROJECT / "trading_dashboard.py"), default_timeout=10).run()
             self.assertFalse(app.exception)
             self.assertFalse(self.ledger.path.exists())
             market.assert_not_called()
             self.assertTrue(any(node.value.startswith("DC 5%") for node in app.header))
             self.assertTrue(any(node.value == "PAPER TRADING" for node in app.header))
-
-            market.return_value = ({"INFY": bars([MONDAY], [100])}, {})
-            app.button(key="dc_forward_refresh").click().run()
-            self.assertFalse(app.exception)
-            table = next(item.value for item in app.dataframe if "Daily DC signal" in item.value)
-            self.assertEqual(table.set_index("Symbol").loc["INFY", "Daily DC signal"], "Bullish")
-            now[0] = clock(TUESDAY, 10)
-            market.return_value = ({}, {"INFY": quote(101, now[0])})
-            app.button(key="dc_forward_refresh").click().run()
-            self.assertFalse(app.exception)
-            self.assertTrue(any(metric.label == "DC max drawdown" for metric in app.metric))
-            self.assertEqual(len(self.ledger.snapshot().fills), 1)
+            self.assertFalse(any(node.label == "Refresh DC signals and paper fills" for node in app.button))
+            self.assertTrue(any("paused" in node.value.lower() for node in app.warning))
         self.assertEqual(hashlib.sha256(manual.read_bytes()).hexdigest(), digest)
 
 

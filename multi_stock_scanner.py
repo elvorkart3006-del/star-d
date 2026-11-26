@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException, TokenException
 
+from market_data_retention import strip_raw_market_columns
+
 
 DEFAULT_STOCKS = [
     "INFY",
@@ -42,7 +44,8 @@ QUOTE_REQUEST_INTERVAL = 1.05
 MAX_RATE_LIMIT_RETRIES = 3
 IST = ZoneInfo("Asia/Kolkata")
 PROJECT_FOLDER = Path(__file__).resolve().parent
-RESULTS_FILE = PROJECT_FOLDER / "data" / "stock_scanner_results.csv"
+RESULTS_FILE = PROJECT_FOLDER / "data" / "stock_scanner_results_derived.csv"
+LEGACY_RESULTS_FILE = PROJECT_FOLDER / "data" / "stock_scanner_results.csv"
 
 _RATE_LIMIT_LOCKS = {
     "historical": threading.Lock(),
@@ -513,11 +516,17 @@ def scan_stocks(
 
 
 def save_results_csv(results, destination=None):
-    """Export the summary rows to the established scanner CSV path."""
+    """Save derived scanner results without exact closes or live quote fields."""
     output_path = Path(destination) if destination else RESULTS_FILE
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(results).to_csv(output_path, index=False)
+    derived = derived_results_frame(results)
+    derived.to_csv(output_path, index=False)
     return output_path
+
+
+def derived_results_frame(results):
+    """Return scanner signals and settings without exact market-price fields."""
+    return strip_raw_market_columns(pd.DataFrame(results))
 
 
 def print_results_table(results):
@@ -593,8 +602,8 @@ def main(argv=None):
     print(f"Confirmed daily SMA: {args.sma_short}/{args.sma_long}")
     print("Provisional signals use a fresh current-session quote and are not confirmed.")
     print_results_table(results)
-    save_results_csv(results)
-    print("\nResults saved to data/stock_scanner_results.csv")
+    output_path = save_results_csv(results)
+    print(f"\nDerived results saved to {output_path.relative_to(PROJECT_FOLDER)}")
     return 0
 
 

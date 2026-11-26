@@ -10,8 +10,6 @@ from unittest.mock import patch
 from xml.etree import ElementTree
 
 import pandas as pd
-from kiteconnect.exceptions import TokenException
-from requests.exceptions import ConnectionError
 
 import dc_daily_report as daily
 import dc_forward as forward
@@ -133,25 +131,24 @@ class DailyReportTests(unittest.TestCase):
             WEDNESDAY, clock(THURSDAY, 11), ledger=self.ledger, output=self.output, catch_up=True,
         ), final)
 
-    def test_expired_token_and_offline_report_still_written_without_fills(self):
+    def test_dc_refresh_is_paused_and_saved_report_still_works(self):
         self.closes(MONDAY, 100)
-        for hour, failure, label in (
-            (18, TokenException("sensitive token"), "Expired or invalid Kite token"),
-            (19, ConnectionError("sensitive connection details"), "Network error"),
-        ):
-            now = clock(WEDNESDAY, hour)
-            with (
-                patch.object(daily.research, "load_histories", return_value=self.seed),
-                patch.object(scanner, "create_kite_client", side_effect=failure),
-                patch.object(paper, "now_ist", return_value=now),
-            ):
-                self.assertEqual(daily.refresh_closes(self.ledger, WEDNESDAY, now, {}, source="Windows schedule"), label)
+        original = self.ledger.path.read_bytes()
+        now = clock(WEDNESDAY, 18)
+        with patch.object(
+            scanner, "create_kite_client", side_effect=AssertionError("Kite call while DC feed is paused")
+        ) as create_client:
+            status = daily.refresh_closes(
+                self.ledger, WEDNESDAY, now, {}, source="Windows schedule"
+            )
+        self.assertTrue(status.startswith("Paused:"))
+        create_client.assert_not_called()
+        self.assertEqual(self.ledger.path.read_bytes(), original)
         path = daily.generate_reports(WEDNESDAY, clock(WEDNESDAY, 20), ledger=self.ledger, output=self.output)
         row = pd.read_csv(path / "summary.csv").iloc[0]
-        self.assertEqual(row["api_errors_recorded"], 2)
         self.assertTrue(pd.isna(row["equity_inr"]))
         self.assertFalse(self.ledger.snapshot().fills)
-        self.assertNotIn("sensitive", (path / "report.html").read_text(encoding="utf-8"))
+        self.assertEqual(self.ledger.path.read_bytes(), original)
 
     def test_report_uses_dated_scanner_closes_without_writing_dc_journal(self):
         self.ledger.refresh(self.seed, {}, {}, clock(MONDAY, 11))
@@ -243,34 +240,23 @@ class DailyReportTests(unittest.TestCase):
         self.assertEqual(daily.latest_report(self.output), interim)
         self.assertEqual(list(interim.parent.iterdir()), [interim])
 
-    def test_scheduled_refresh_calls_only_historical_endpoint(self):
+    def test_scheduled_refresh_is_paused_without_kite_or_journal_changes(self):
         self.closes(MONDAY, 100)
-
-        class CandleOnlyKite:
-            def instruments(self, exchange):
-                self.exchange = exchange
-                return [
-                    {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ",
-                     "tradingsymbol": symbol, "instrument_token": index}
-                    for index, symbol in enumerate(forward.SYMBOLS, 1)
-                ]
-
-            def historical_data(self, **kwargs):
-                return [{"date": clock(WEDNESDAY, 0), "open": 95, "high": 95, "low": 95, "close": 95, "volume": 100}]
-
-        with (
-            patch.object(daily.research, "load_histories", return_value=self.seed),
-            patch.object(scanner, "create_kite_client", return_value=CandleOnlyKite()),
-            patch.object(scanner, "_call_with_rate_limit", side_effect=lambda call, endpoint: call()),
-            patch.object(paper, "now_ist", return_value=clock(WEDNESDAY, 18)),
-        ):
-            self.assertEqual(daily.refresh_closes(
-                self.ledger, WEDNESDAY, clock(WEDNESDAY, 18), {}, source="Windows schedule"
-            ), "Updated")
+        original = self.ledger.path.read_bytes()
+        now = clock(WEDNESDAY, 18)
+        with self.assertRaises(forward.MarketDataPaused):
+            forward.fetch_completed_candles(None, None, {}, WEDNESDAY)
+        with patch.object(
+            scanner, "create_kite_client", side_effect=AssertionError("Kite call while DC feed is paused")
+        ) as create_client:
+            status = daily.refresh_closes(
+                self.ledger, WEDNESDAY, now, {}, source="Windows schedule"
+            )
+        self.assertTrue(status.startswith("Paused:"))
+        create_client.assert_not_called()
         snapshot = self.ledger.snapshot()
         self.assertEqual(len(snapshot.fills), 0)
-        self.assertIsNone(snapshot.observations[-1]["fresh_quotes"])
-        self.assertEqual(sum(row["session"] == str(WEDNESDAY) for row in snapshot.closes), 7)
+        self.assertEqual(self.ledger.path.read_bytes(), original)
 
     def test_dashboard_displays_archived_report_and_existing_panels(self):
         from streamlit.testing.v1 import AppTest

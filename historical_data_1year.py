@@ -1,4 +1,4 @@
-"""Download about one year of completed daily Infosys prices."""
+"""Temporarily process about one year of completed Infosys candles."""
 
 import os
 from datetime import datetime, timedelta
@@ -64,17 +64,12 @@ def main():
         print("No historical prices were returned for the selected date range.")
         return
 
-    data_folder = Path(__file__).with_name("data")
-    data_folder.mkdir(parents=True, exist_ok=True)
-    csv_file = data_folder / "INFY_1year.csv"
-    data.to_csv(csv_file, index=False)
-
     earliest_date = pd.to_datetime(data["date"]).min().strftime("%Y-%m-%d")
     latest_date = pd.to_datetime(data["date"]).max().strftime("%Y-%m-%d")
     print(f"Trading sessions downloaded: {len(data)}")
     print(f"Earliest date: {earliest_date}")
     print(f"Latest date: {latest_date}")
-    print("Daily OHLCV data saved to data/INFY_1year.csv")
+    print("Raw daily candles were processed in memory and were not saved to disk.")
 
 
 if __name__ == "__main__":

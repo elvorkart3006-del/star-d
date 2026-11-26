@@ -3,7 +3,7 @@
 Run from the Trading project folder with:
     streamlit run trading_dashboard.py
 
-Kite market data is requested by scanner and paper trading actions.
+Kite market data is used for scanner analysis. Paper trading is disabled.
 """
 
 import io
@@ -21,11 +21,12 @@ from kiteconnect.exceptions import TokenException
 
 import multi_stock_scanner as scanner
 from dc_forward_view import render_dc_forward
-from paper_trading_view import render_paper_trading
+from paper_trading_view import fetch_paper_quotes, render_paper_trading
 
 
 PROJECT_FOLDER = Path(__file__).resolve().parent
-RESULTS_FILE = PROJECT_FOLDER / "data" / "stock_scanner_results.csv"
+RESULTS_FILE = scanner.RESULTS_FILE
+LEGACY_RESULTS_FILE = scanner.LEGACY_RESULTS_FILE
 NIFTY100_CSV_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 NIFTY100_REFERER = "https://www.niftyindices.com/indices/equity/broad-based-indices/nifty-100"
 IST = ZoneInfo("Asia/Kolkata")
@@ -89,7 +90,7 @@ def download_nifty100_symbols():
 
 def load_results_csv():
     """Load current or older scanner exports and add newer display columns."""
-    results = pd.read_csv(RESULTS_FILE)
+    results = pd.read_csv(results_source_path())
     if "Symbol" not in results.columns:
         raise ValueError("The scanner CSV does not contain a Symbol column.")
 
@@ -136,9 +137,16 @@ def load_results_csv():
     return results
 
 
+def results_source_path():
+    """Prefer the sanitized export and retain read compatibility with old CSVs."""
+    if RESULTS_FILE.is_file():
+        return RESULTS_FILE
+    return LEGACY_RESULTS_FILE
+
+
 def get_results_modified_text():
     """Return the results CSV modification time in India time."""
-    modified = datetime.fromtimestamp(RESULTS_FILE.stat().st_mtime, IST)
+    modified = datetime.fromtimestamp(results_source_path().stat().st_mtime, IST)
     return modified.strftime("%d %b %Y, %I:%M:%S %p IST")
 
 
@@ -154,18 +162,6 @@ def fetch_instrument_catalog():
     try:
         kite = scanner.create_kite_client()
         return scanner.get_nse_equity_universe(kite)
-    finally:
-        API_ACTION_LOCK.release()
-
-
-def fetch_paper_quotes(symbols):
-    """Use the scanner's shared lock and quote pacing for paper market data."""
-    if not API_ACTION_LOCK.acquire(blocking=False):
-        raise RuntimeError("Another Kite data request is already running.")
-    try:
-        kite = scanner.create_kite_client()
-        instruments = [f"NSE:{symbol}" for symbol in symbols]
-        return scanner._call_with_rate_limit(lambda: kite.quote(instruments), "quote")
     finally:
         API_ACTION_LOCK.release()
 
@@ -398,7 +394,7 @@ if "scan_results" not in st.session_state:
     st.session_state["nse_catalog"] = []
     st.session_state["historical_candle_cache"] = {}
     st.session_state["load_error"] = False
-    if RESULTS_FILE.is_file():
+    if results_source_path().is_file():
         try:
             st.session_state["scan_results"] = load_results_csv()
         except Exception:
@@ -601,12 +597,13 @@ else:
         f"{len(st.session_state.get('latest_scan_symbols', []))} stocks. "
         "Sidebar stock and SMA changes apply after the next manual refresh."
     )
-    if RESULTS_FILE.is_file():
+    if results_source_path().is_file():
         st.caption(f"CSV last modified: **{get_results_modified_text()}**")
+    safe_download = scanner.derived_results_frame(results)
     st.download_button(
         "Download scanner results CSV",
-        data=results.to_csv(index=False).encode("utf-8"),
-        file_name="stock_scanner_results.csv",
+        data=safe_download.to_csv(index=False).encode("utf-8"),
+        file_name="stock_scanner_results_derived.csv",
         mime="text/csv",
         icon=":material/download:",
     )

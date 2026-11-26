@@ -1,4 +1,4 @@
-"""Persistent DC 5% forward simulation using completed closes and live quotes."""
+"""Persistent DC 5% forward simulation using saved closes and approved market data."""
 
 import sqlite3
 from contextlib import contextmanager
@@ -11,7 +11,6 @@ import pandas as pd
 import backtest_sma_6_30_kite as kite_batch
 import backtest_with_costs as backtest
 import dc_research as research
-import multi_stock_scanner as scanner
 import paper_trading as paper
 
 
@@ -20,6 +19,10 @@ JOURNAL_PATH = backtest.DATA_DIR / "dc_forward.sqlite3"
 SLEEVE_CAPITAL = paper.to_paise(backtest.STARTING_CAPITAL)
 TOTAL_CAPITAL = SLEEVE_CAPITAL * len(SYMBOLS)
 DAILY_CUTOFF = time(16)
+MARKET_DATA_PAUSE_REASON = (
+    "DC external market-data refresh is paused pending an approved data source. "
+    "Saved candles and journal records remain available for reports."
+)
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS run (
         id INTEGER PRIMARY KEY CHECK (id = 1), started_at TEXT NOT NULL,
@@ -66,6 +69,10 @@ class Snapshot:
         return [row for row in self.signals if row["status"] == "Filled"]
 
 
+class MarketDataPaused(RuntimeError):
+    """Raised when a DC workflow attempts to fetch an unapproved market feed."""
+
+
 def completed_cutoff(now):
     """Wait until 16:00 IST to use the current day's daily candle."""
     return now.date() if now.time() >= DAILY_CUTOFF else now.date() - timedelta(days=1)
@@ -107,27 +114,8 @@ def latest_signals(histories):
 
 
 def fetch_completed_candles(kite, catalog, starts, cutoff):
-    """Shared, paced historical-only refresh for the dashboard and reports."""
-    tokens = {item["symbol"]: item["instrument_token"] for item in catalog}
-    if not starts.keys() <= tokens.keys():
-        raise ValueError("The Kite catalog is missing a DC research stock.")
-    candles = {}
-    for symbol, start in starts.items():
-        rows = []
-        while start <= cutoff:
-            end = min(start + timedelta(days=1999), cutoff)
-            rows.extend(scanner._call_with_rate_limit(
-                lambda: kite.historical_data(
-                    instrument_token=tokens[symbol],
-                    from_date=datetime.combine(start, time.min),
-                    to_date=datetime.combine(end, time(23, 59, 59)),
-                    interval="day",
-                ),
-                "historical",
-            ))
-            start = end + timedelta(days=1)
-        candles[symbol] = scanner._prepare_candles(rows, starts[symbol], cutoff)
-    return candles
+    """Block external data in DC workflows until an authorized feed is configured."""
+    raise MarketDataPaused(MARKET_DATA_PAUSE_REASON)
 
 
 class ForwardLedger:

@@ -31,3 +31,18 @@ The dashboard tracks at least 60 complete trading sessions, at least 30 closed r
 Raw candle and detailed fill files used for this research are excluded from the repository and were removed from local working data. Retained figures are aggregate derived outputs; do not publish outputs that permit reconstruction of underlying prices.
 
 Data-use note: Zerodha permits temporary historical-candle analysis but prohibits permanent raw-data retention or redistribution, and live market data must not be used in simulated portfolios. Kite-powered paper fills and external DC refresh are disabled. Use synthetic inputs or an explicitly authorized feed for simulation.
+
+## 28 November 2026 ? STAR-D forward signal outcomes
+
+STAR-D scores confirmed frozen DC 5% BUYs. For each BUY it compares the close of the first, third and fifth completed NSE trading sessions after confirmation against the signal-session close. The scheduled trading-session sequence fixes each target date. A missing candle leaves a completed horizon unavailable and cannot shift the target. Future horizons stay pending until the 16:00 IST completed-candle cutoff. Kite candles are processed in memory. Local outputs retain only labels, dates, status details and aggregate counts. [NSE 2026 capital-market calendar](https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf)
+
+| Confirmed BUY on 26 November | One session ? 27 November | Three sessions ? 1 December | Five sessions ? 3 December |
+| --- | --- | --- | --- |
+| INFY | LOWER | PENDING | PENDING |
+| WIPRO | LOWER | PENDING | PENDING |
+
+The pilot covers two signals on one confirmation date. The labels measure close-to-close direction. They provide no estimate of return magnitude, next-open execution, transaction costs, or strategy profitability. The two 27 November execution opportunities remain unverified and outside the confirmed missed-fill count.
+
+Seven-stock same-session completed-close coverage is **2 of 4 expected sessions** since 23 November. The 26 and 27 November checks passed for all seven stocks. The 23 and 25 November sessions lack same-session reports. Retrospective checks remain outside that count. The coverage milestone remains 19 of 20 expected sessions, and execution coverage is unverified.
+
+For offline verification, run `python -B -m unittest -v test_star_d_outcomes_offline`. The five synthetic tests cover direction labels and aggregate counts, weekend session indexing, the cutoff, missing candles, and authentication failure. To run the pilot with valid Kite authentication, use `python -B star_d_outcomes.py` with the validated 26 November signal report held locally. For a different local signal report, use `--signals` and supply the expected NSE trading sessions in ascending order with repeated `--session` arguments. Local signal and outcome files stay outside source control.

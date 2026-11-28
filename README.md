@@ -23,5 +23,17 @@ This repository contains source code and sanitized documentation. Credentials, m
 | `dc_research.py` and `dc_robustness.py` | Fixed-threshold DC research and transaction cost stress tests |
 | `dc_daily_report.py` and `dc_report_schedule.py` | Local reporting and Windows Task Scheduler XML export |
 | `dc_5_percent_strategy.pine` | TradingView Pine v6 implementation with on-chart paper results |
+| `star_d_outcomes.py` and `dc_daily_signal_monitor.py` | Read-only completed-close signals and STAR-D forward outcome labels |
 
 Offline tests use synthetic inputs and do not contact Kite. Scanner exports omit exact closes, LTPs and quote timestamps. Paper-trading screens and DC external-data refreshes are paused. Kite historical data can be used temporarily for analysis only; it must not be permanently stored or redistributed. Derived research outputs may be retained only when they cannot be used to reconstruct raw prices. [Kite Connect terms](https://kite.trade/terms/#api-usage)
+
+## Research progress
+
+| Milestone | Status as of 28 November 2026 |
+| --- | --- |
+| Seven-stock completed-close coverage | 2 of 4 expected sessions since 23 November validated on the session date. Target is 19 of the latest 20 expected sessions. |
+| STAR-D pilot outcomes | 2 confirmed BUYs scored at one session, both LOWER. Four stock-horizon observations remain pending across the three- and five-session checks. Five synthetic offline tests pass. |
+| Next STAR-D checkpoints | Score the three-session horizon after 16:00 IST on 1 December and the five-session horizon after 16:00 IST on 3 December, subject to completed candles. |
+| Forward strategy evaluation | Existing targets remain at least 60 complete trading sessions and at least 30 closed round trips. The signal-only pilot does not supply execution observations or round trips. |
+
+Run the focused synthetic tests with `python -B -m unittest -v test_star_d_outcomes_offline`. See the [28 November STAR-D research entry](docs/research/research-log.md#28-november-2026--star-d-forward-signal-outcomes) for methodology and coverage.

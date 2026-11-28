@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/star-d-banner.svg" alt="STAR-D — Systematic Trading Research and Decision Analytics" width="100%" />
+  <img src="assets/star-d-research-overview.svg" alt="STAR-D research overview: seven NSE equities, 1,241 sessions per stock, eight offline test suites, research workflow, simulated strategy results and development stack" width="100%" />
 </p>
 
 <h1 align="center">STAR-D</h1>
